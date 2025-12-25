@@ -26,9 +26,14 @@ public class RsaUtil {
     public static final String SIGN_ALGORITHMS_SHA256RSA_PSS = "SHA256withRSA/PSS";
     private static final int MAX_ENCRYPT_BLOCK = 501;
     private static final int MAX_DECRYPT_BLOCK = 512;
+    private static ExternalRsaProvider externalRsaProvider;
 
     static {
         Security.addProvider(new BouncyCastleProvider());
+    }
+
+    public static void setExtProvider(ExternalRsaProvider lExternalRsaProvider) {
+        externalRsaProvider = lExternalRsaProvider;
     }
 
     public static String encrypt(byte[] plainText, String publicKey, RSATypeEnum RSAType) throws Exception {
@@ -68,6 +73,9 @@ public class RsaUtil {
     }
 
     public static byte[] decrypt(String content, String privateKey, RSATypeEnum RSAType) throws Exception {
+        if (externalRsaProvider != null) {
+            return externalRsaProvider.decrypt(content, privateKey, RSAType);
+        }
         ByteArrayOutputStream out = null;
         try {
             PrivateKey priKey = getPrivateKey(SIGN_TYPE_RSA, privateKey);
@@ -106,6 +114,9 @@ public class RsaUtil {
     }
 
     public static String sign(String content, String privateKey) throws Exception {
+        if (externalRsaProvider != null) {
+            return externalRsaProvider.sign(content, privateKey);
+        }
         PrivateKey priKey = getPrivateKey(SIGN_TYPE_RSA, privateKey);
         Signature privateSignature = Signature.getInstance(SIGN_ALGORITHMS_SHA256RSA);
         privateSignature.initSign(priKey);
@@ -115,6 +126,9 @@ public class RsaUtil {
     }
 
     public static String signPSS(String content, String privateKey) throws Exception {
+        if (externalRsaProvider != null) {
+            return externalRsaProvider.signPSS(content, privateKey);
+        }
         PrivateKey priKey = getPrivateKey(SIGN_TYPE_RSA, privateKey);
         Signature privateSignature = Signature.getInstance(SIGN_ALGORITHMS_SHA256RSA_PSS);
         privateSignature.initSign(priKey);
