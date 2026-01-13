@@ -1,11 +1,11 @@
 package com.safeheron.demo.api.transaction;
 
+import com.safeheron.client.KeyProvider;
 import com.safeheron.client.api.TransactionApiService;
 import com.safeheron.client.config.RSATypeEnum;
 import com.safeheron.client.config.SafeheronConfig;
 import com.safeheron.client.request.CreateTransactionRequest;
 import com.safeheron.client.response.TxKeyResult;
-import com.safeheron.client.utils.ExternalRsaProvider;
 import com.safeheron.client.utils.RsaUtil;
 import com.safeheron.client.utils.ServiceCreator;
 import com.safeheron.client.utils.ServiceExecutor;
@@ -70,93 +70,84 @@ public class TransactionTest {
     }
 
     /**
-     * Test case for sending a transaction using an ExternalRsaProvider.
+     * Test case for sending a transaction using a custom KeyProvider.
      *
-     * <p>This test demonstrates how to integrate a custom {@link ExternalRsaProvider}
-     * to perform RSA signing through an external system (e.g. HSM / KMS),
-     * instead of configuring the complete RSA private key in the SDK.</p>
+     * <p>This test demonstrates how to integrate a custom {@link KeyProvider}
+     * to perform RSA signing through an external system (e.g. Self-Managed Key Management).
      *
-     * <p>For demonstration purposes, this test uses a mock implementation
-     * of {@code ExternalRsaProvider} that performs local RSA signing.
-     * In real production scenarios, the signing logic should be delegated
-     * to a secure key management or signing service, identified by {@code keyId}.</p>
+     * <p>In this scenario, we demonstrate that the "privateKey" field in config.yaml
+     * can actually be a "keyId" or "keyName" used by your KMS, rather than the actual private key.</p>
      */
     @Test
-    public void testSendTransactionWithExternalRsaProvider() {
+    public void testSendTransactionWithKeyProvider() {
+        // 1. Assume we got a keyId from our configuration (e.g., config.yaml)
+        // Although the key in YAML is named 'privateKey', its content could be a 'keyId'
+        String keyIdFromConfig = config.get("privateKey").toString();
 
         /**
-         * Mock implementation of ExternalRsaProvider.
-         *
-         * <p>This implementation simulates an external signing system by
-         * performing RSA signing locally using a private key loaded from
-         * configuration. It is intended for testing and demonstration only.</p>
+         * 2. Define a Self-Managed KeyProvider.
+         * In a real project, this class would be part of your application code.
          */
-        ExternalRsaProvider mockRsaProvider = new ExternalRsaProvider() {
+        class MySelfManagedKeyProvider implements KeyProvider {
+            private final String keyId;
 
-            /**
-             * Sign the given content using RSA (SHA256withRSA).
-             *
-             * <p>The {@code keyId} parameter is ignored in this mock implementation.
-             * In real-world usage, {@code keyId} should be used to locate the
-             * corresponding RSA key in an HSM or KMS.</p>
-             */
+            public MySelfManagedKeyProvider(String keyId) {
+                this.keyId = keyId;
+            }
+
             @Override
-            public String sign(String content, String keyId) {
+            public String sign(String content) {
+                // In a real scenario, you would call your signing service:
+                // return mySigningService.sign(content, this.keyId);
+
+                // For this test to pass, we simulate the signing service by signing locally
+                // using the keyId (which we know is actually the private key in this demo)
                 try {
-                    PrivateKey priKey = getPrivateKey("RSA", config.get("privateKey").toString());
+                    PrivateKey priKey = getPrivateKey("RSA", this.keyId);
                     Signature privateSignature = Signature.getInstance("SHA256WithRSA");
                     privateSignature.initSign(priKey);
                     privateSignature.update(content.getBytes(StandardCharsets.UTF_8));
                     byte[] signature = privateSignature.sign();
                     return Base64.getEncoder().encodeToString(signature);
-                } catch (Exception ignored) {
+                } catch (Exception e) {
+                    throw new RuntimeException("Signing failed", e);
                 }
-                return null;
             }
 
-            /**
-             * RSA-PSS signing is not implemented in this mock.
-             *
-             * <p>This method is intentionally left blank as the current test
-             * does not require RSA-PSS signing.</p>
-             */
             @Override
-            public String signPSS(String content, String keyId) {
+            public String signPSS(String content) {
                 return "";
             }
 
-            /**
-             * RSA decryption is not implemented in this mock.
-             *
-             * <p>This method is not required for transaction creation
-             * in the current test scenario.</p>
-             */
             @Override
-            public byte[] decrypt(String content, String keyId, RSATypeEnum rsaType) {
+            public byte[] decrypt(String content, RSATypeEnum rsaType) {
                 return new byte[0];
             }
 
-            /**
-             * Utility method to load an RSA private key from a Base64-encoded string.
-             *
-             * <p>This method is used only for test purposes to simulate
-             * an external signing system.</p>
-             */
             private PrivateKey getPrivateKey(String algorithm, String privateKey) throws Exception {
                 KeyFactory keyFactory = KeyFactory.getInstance(algorithm);
                 byte[] privateKeyData = Base64.getDecoder().decode(privateKey.getBytes(StandardCharsets.UTF_8));
                 return keyFactory.generatePrivate(new PKCS8EncodedKeySpec(privateKeyData));
             }
-        };
+        }
+
+        // 3. Instantiate your provider with the keyId
+        KeyProvider mySelfManagedProvider = new MySelfManagedKeyProvider(keyIdFromConfig);
 
         /**
-         * Register the ExternalRsaProvider so that the SDK delegates
-         * RSA signing operations to the external provider.
+         * 4. Build TransactionApiService with the custom KeyProvider.
+         * Notice we don't call .rsaPrivateKey() here, as the provider handles everything.
          */
-        RsaUtil.setExtProvider(mockRsaProvider);
+        TransactionApiService transactionApiWithKeyProvider = ServiceCreator.create(TransactionApiService.class, SafeheronConfig.builder()
+                .baseUrl(config.get("baseUrl").toString())
+                .apiKey(config.get("apiKey").toString())
+                .safeheronRsaPublicKey(config.get("safeheronPublicKey").toString())
+                .keyProvider(mySelfManagedProvider)
+                .requestTimeout(Long.valueOf(config.get("requestTimeout").toString()))
+                .build());
 
         /**
-         * Build transaction creation request.
+         * 5. Execute transaction creation as usual.
          */
         CreateTransactionRequest createTransactionRequest = new CreateTransactionRequest();
         createTransactionRequest.setSourceAccountKey(config.get("accountKey").toString());
@@ -167,7 +158,7 @@ public class TransactionTest {
         createTransactionRequest.setTxAmount("0.001");
         createTransactionRequest.setTxFeeLevel("MIDDLE");
         createTransactionRequest.setCustomerRefId(UUID.randomUUID().toString());
-        TxKeyResult createTransactionResponse = ServiceExecutor.execute(transactionApi.createTransactions(createTransactionRequest));
+        TxKeyResult createTransactionResponse = ServiceExecutor.execute(transactionApiWithKeyProvider.createTransactions(createTransactionRequest));
         System.out.println(String.format("transaction has been created, txKey: %s", createTransactionResponse.getTxKey()));
     }
 
